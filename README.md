@@ -40,6 +40,6 @@ We will showcase all the typical steps in a machine learning pipeline using nati
 - [Deploy model to Snowpark Container Services](https://docs.snowflake.com/en/developer-guide/snowflake-ml/model-registry/container) 
 
 ## Setup
-```sql
-WIP
-```
+1. Run `setup.sql` in a SQL Worksheet
+1. Change role to `ATTENDEE ROLE`
+2. Navigate to `Notebooks` > `E2E_ML_NOTEBOOK`
