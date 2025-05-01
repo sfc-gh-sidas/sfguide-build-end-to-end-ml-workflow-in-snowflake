@@ -1,75 +1,124 @@
 -- Using ACCOUNTADMIN, create a new role for this exercise 
 USE ROLE ACCOUNTADMIN;
+
+-- Create or replace a warehouse with auto-suspend enabled
+CREATE OR REPLACE WAREHOUSE DEFAULT_WH
+    AUTO_SUSPEND = 60
+    AUTO_RESUME = TRUE -- Consider enabling auto-resume for better usability
+    INITIALLY_SUSPENDED = TRUE; -- Start in a suspended state to save costs
+
+-- Set the active warehouse for subsequent operations
+USE WAREHOUSE DEFAULT_WH;
+
+-- Get username
 SET USERNAME = (SELECT CURRENT_USER());
 SELECT $USERNAME;
-CREATE OR REPLACE ROLE E2E_SNOW_MLOPS_ROLE;
+
+-- Create the ATTENDEE_ROLE 
+CREATE OR REPLACE ROLE ATTENDEE_ROLE;
 
 -- Grant necessary permissions to create databases, compute pools, and service endpoints to new role
-GRANT CREATE DATABASE on ACCOUNT to ROLE E2E_SNOW_MLOPS_ROLE; 
-GRANT CREATE COMPUTE POOL on ACCOUNT to ROLE E2E_SNOW_MLOPS_ROLE;
-GRANT BIND SERVICE ENDPOINT on ACCOUNT to ROLE E2E_SNOW_MLOPS_ROLE;
+USE ROLE ACCOUNTADMIN;
+GRANT CREATE DATABASE ON ACCOUNT TO ROLE ATTENDEE_ROLE; 
+GRANT CREATE COMPUTE POOL ON ACCOUNT TO ROLE ATTENDEE_ROLE;
+GRANT BIND SERVICE ENDPOINT ON ACCOUNT TO ROLE ATTENDEE_ROLE;
+GRANT CREATE ROLE ON ACCOUNT TO ROLE ATTENDEE_ROLE;
+GRANT CREATE WAREHOUSE ON ACCOUNT TO ROLE ATTENDEE_ROLE;
+GRANT MANAGE GRANTS ON ACCOUNT TO ROLE ATTENDEE_ROLE;
+GRANT CREATE INTEGRATION ON ACCOUNT TO ROLE ATTENDEE_ROLE;
+GRANT CREATE APPLICATION PACKAGE ON ACCOUNT TO ROLE ATTENDEE_ROLE;
+GRANT CREATE APPLICATION ON ACCOUNT TO ROLE ATTENDEE_ROLE;
+GRANT IMPORT SHARE ON ACCOUNT TO ROLE ATTENDEE_ROLE;
 
 -- grant new role to user and switch to that role
-GRANT ROLE E2E_SNOW_MLOPS_ROLE to USER identifier($USERNAME);
-USE ROLE E2E_SNOW_MLOPS_ROLE;
+GRANT ROLE ATTENDEE_ROLE to USER identifier($USERNAME);
+USE ROLE ATTENDEE_ROLE;
 
--- Create warehouse
-CREATE OR REPLACE WAREHOUSE E2E_SNOW_MLOPS_WH WITH WAREHOUSE_SIZE='MEDIUM';
+-- Create or replace a Snowpark-optimized virtual warehouse for ML workloads
+CREATE OR REPLACE WAREHOUSE E2E_ML_HOL_WAREHOUSE WITH
+  WAREHOUSE_SIZE = 'MEDIUM'
+  AUTO_SUSPEND = 300 -- Consider a more appropriate auto-suspend time for ML workloads
+  AUTO_RESUME = TRUE
+  INITIALLY_SUSPENDED = TRUE;
 
 -- Create Database 
-CREATE OR REPLACE DATABASE E2E_SNOW_MLOPS_DB;
+CREATE OR REPLACE DATABASE DATAOPS_EVENT_PROD;
 
 -- Create Schema
-CREATE OR REPLACE SCHEMA MLOPS_SCHEMA;
+CREATE OR REPLACE SCHEMA DEFAULT_SCHEMA;
 
--- Create compute pool
-CREATE COMPUTE POOL IF NOT EXISTS MLOPS_COMPUTE_POOL 
- MIN_NODES = 1
- MAX_NODES = 1
- INSTANCE_FAMILY = CPU_X64_M;
+-- Create a GPU compute pool for NVIDIA S-series with 4 nodes
+CREATE COMPUTE POOL IF NOT EXISTS CP_GPU_NV_S_4
+  MIN_NODES = 4
+  MAX_NODES = 4
+  INSTANCE_FAMILY = GPU_NV_S
+  INITIALLY_SUSPENDED = TRUE
+  AUTO_RESUME = TRUE
+  AUTO_SUSPEND_SECS = 300;
 
 -- Using accountadmin, grant privilege to create network rules and integrations on newly created db
 USE ROLE ACCOUNTADMIN;
-GRANT CREATE NETWORK RULE on SCHEMA MLOPS_SCHEMA to ROLE E2E_SNOW_MLOPS_ROLE;
-GRANT CREATE INTEGRATION on ACCOUNT to ROLE E2E_SNOW_MLOPS_ROLE;
-USE ROLE E2E_SNOW_MLOPS_ROLE;
+GRANT CREATE NETWORK RULE ON SCHEMA DEFAULT_SCHEMA TO ROLE ATTENDEE_ROLE;
+USE ROLE ATTENDEE_ROLE;
 
+-- Create a network rule for PyPI access if it doesn't exist
+CREATE OR REPLACE NETWORK RULE pypi_network_rule
+  MODE = EGRESS
+  TYPE = HOST_PORT
+  VALUE_LIST = ('pypi.org:443', 'pypi.python.org:443', 'pythonhosted.org:443', 'files.pythonhosted.org:443'); -- Explicitly include port 443 for HTTPS
 
- --Create network rule and api integration to install packages from pypi
-CREATE OR REPLACE NETWORK RULE mlops_pypi_network_rule
- MODE = EGRESS
- TYPE = HOST_PORT
- VALUE_LIST = ('pypi.org', 'pypi.python.org', 'pythonhosted.org',  'files.pythonhosted.org');
+-- Create an external access integration for PyPI if it doesn't exist
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION pypi_access_integration
+  ALLOWED_NETWORK_RULES = (pypi_network_rule)
+  ENABLED = TRUE;
 
- -- Create external access integration on top of network rule for pypi access
-CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION mlops_pypi_access_integration
- ALLOWED_NETWORK_RULES = (mlops_pypi_network_rule)
- ENABLED = true;
+-- Create a broad network rule to allow all outbound traffic on ports 80 and 443 if it doesn't exist
+CREATE OR REPLACE NETWORK RULE allow_all_rule
+  TYPE = HOST_PORT
+  MODE = EGRESS
+  VALUE_LIST = ('0.0.0.0:443', '0.0.0.0:80');
+
+-- Create a broad external access integration allowing all outbound traffic if it doesn't exist
+CREATE OR REPLACE EXTERNAL ACCESS INTEGRATION allow_all_integration
+  ALLOWED_NETWORK_RULES = (allow_all_rule)
+  ENABLED = TRUE;
 
 -- Create an API integration with Github
 CREATE OR REPLACE API INTEGRATION GITHUB_INTEGRATION_E2E_SNOW_MLOPS
    api_provider = git_https_api
-   api_allowed_prefixes = ('https://github.com/Snowflake-Labs')
+   api_allowed_prefixes = ('https://github.com/')
    enabled = true
    comment='Git integration with Snowflake Demo Github Repository.';
 
 -- Create the integration with the Github demo repository
 CREATE OR REPLACE GIT REPOSITORY GITHUB_REPO_E2E_SNOW_MLOPS
-   ORIGIN = 'https://github.com/Snowflake-Labs/sfguide-build-end-to-end-ml-workflow-in-snowflake' 
+   ORIGIN = 'https://github.com/sfc-gh-sidas/sfguide-build-end-to-end-ml-workflow-in-snowflake' 
    API_INTEGRATION = 'GITHUB_INTEGRATION_E2E_SNOW_MLOPS' 
-   COMMENT = 'Github Repository ';
+   COMMENT = 'Github Repository';
+
+-- Create an image repository if it doesn't exist
+CREATE OR REPLACE IMAGE REPOSITORY my_inference_images;
+
+USE ROLE ACCOUNTADMIN;
+GRANT CREATE SERVICE ON SCHEMA DATAOPS_EVENT_PROD.DEFAULT_SCHEMA TO ROLE ATTENDEE_ROLE;
+-- Grant CREATE DYNAMIC TABLE privilege on the default schema to the ATTENDEE_ROLE
+GRANT CREATE DYNAMIC TABLE ON SCHEMA DATAOPS_EVENT_PROD.DEFAULT_SCHEMA TO ROLE ATTENDEE_ROLE;
+
+USE ROLE ATTENDEE_ROLE;
 
 -- Fetch most recent files from Github repository
 ALTER GIT REPOSITORY GITHUB_REPO_E2E_SNOW_MLOPS FETCH;
 
 -- Copy notebook into snowflake configure runtime settings
-CREATE OR REPLACE NOTEBOOK E2E_SNOW_MLOPS_DB.MLOPS_SCHEMA.TRAIN_DEPLOY_MONITOR_ML
-FROM '@E2E_SNOW_MLOPS_DB.MLOPS_SCHEMA.GITHUB_REPO_E2E_SNOW_MLOPS/branches/main/' 
-MAIN_FILE = 'train_deploy_monitor_ML_in_snowflake.ipynb' QUERY_WAREHOUSE = E2E_SNOW_MLOPS_WH
-RUNTIME_NAME = 'SYSTEM$BASIC_RUNTIME' 
-COMPUTE_POOL = 'MLOPS_COMPUTE_POOL'
+CREATE OR REPLACE NOTEBOOK DATAOPS_EVENT_PROD.DEFAULT_SCHEMA.E2E_ML_NOTEBOOK
+FROM '@DATAOPS_EVENT_PROD.DEFAULT_SCHEMA.GITHUB_REPO_E2E_SNOW_MLOPS/branches/main/' 
+MAIN_FILE = 'E2E_ML_NOTEBOOK.ipynb' 
+QUERY_WAREHOUSE = E2E_ML_HOL_WAREHOUSE
+RUNTIME_NAME = 'SYSTEM$GPU_RUNTIME' 
+COMPUTE_POOL = 'CP_GPU_NV_S_4'
 IDLE_AUTO_SHUTDOWN_TIME_SECONDS = 3600;
 
-alter NOTEBOOK E2E_SNOW_MLOPS_DB.MLOPS_SCHEMA.TRAIN_DEPLOY_MONITOR_ML set EXTERNAL_ACCESS_INTEGRATIONS = ( 'mlops_pypi_access_integration' )
+ALTER NOTEBOOK DATAOPS_EVENT_PROD.DEFAULT_SCHEMA.E2E_ML_NOTEBOOK ADD LIVE VERSION FROM LAST;
+alter NOTEBOOK DATAOPS_EVENT_PROD.DEFAULT_SCHEMA.E2E_ML_NOTEBOOK set EXTERNAL_ACCESS_INTEGRATIONS = ( 'mlops_pypi_access_integration' )
 
---DONE! Now you can access your newly created notebook with your E2E_SNOW_MLOPS_ROLE and run through the end-to-end workflow!
+--DONE! Now you can access your newly created notebook with your ATTENDEE_ROLE and run through the end-to-end workflow!
